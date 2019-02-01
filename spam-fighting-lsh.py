@@ -24,7 +24,42 @@ X_train = file_list[:int(len(file_list)*TRAINING_SET_RATIO)]  # 52793 out of 754
 X_test = file_list[int(len(file_list)*TRAINING_SET_RATIO):]   # 22626 out of 75419
 
 # Extract only spam files for inserting into the LSH matcher
-spam_files = [x for x in X_train if labels[x] == 0]
+spam_files = [x for x in X_train if labels[x] == 0]     # 0 spam
+
+# Initialize MinHashLSH matcher with a Jaccard
+# threshold of 0.5 and 128 MinHash permutation functions
+lsh = MinHashLSH(threshold=0.5, num_perm=128)
+
+
+# Populate the LSH matcher with training spam MinHashes
+for idx, f in enumerate(spam_files):
+    minhash = MinHash(num_perm=128)
+    stems = email_read_util.load(os.path.join(DATA_DIR, f))
+    if len(stems) < 2:
+        continue
+    for s in stems:
+        minhash.update(s.encode('utf-8'))
+    lsh.insert(f, minhash)
+
+
+def lsh_predict_label(stems):
+    """
+    Queries the LSH matcher and returns:
+        0 if predicted spam
+        1 if predicted ham
+        -1 if parsing error
+    """
+    minhash = MinHash(num_perm=128)
+    if len(stems) < 2:
+        return -1
+    for s in stems:
+        minhash.update(s.encode('utf-8'))
+    matches = lsh.query(minhash)
+    if matches:
+        return 0
+    else:
+        return 1
+
 
 fp = 0
 tp = 0
@@ -38,23 +73,25 @@ for filename in X_test:
         stems = email_read_util.load(path)
         if not stems:
             continue
-        stems_set = set(stems)
-        if stems_set & blacklist:   # it's positive(spam)
+        pred = lsh_predict_label(stems)
+        if pred == -1:
+            continue
+        elif pred == 0:
             if label == 1:
-                fp = fp + 1         # it's false(ham)
+                fp = fp + 1
             else:
-                tp = tp + 1         # it's true(spam)
-        else:                       # it's negative(ham)
+                tp = tp + 1
+        elif pred == 1:
             if label == 1:
-                tn = tn + 1         # it's true(ham)
+                tn = tn + 1
             else:
-                fn = fn + 1         # it's false(spam)
+                fn = fn + 1
 
 conf_matrix = [[tn, fp],
                [fn, tp]]
 display(HTML('<table><tr>{}</tr></table>'.format(
     '</tr><tr>'.join('<td>{}</td>'.format(
-        '<td></td>'.join(str(_) for _ in row)) for row in conf_matrix))))
+        '</td><td>'.join(str(_) for _ in row)) for row in conf_matrix))))
 
 count = tn + tp + fn + fp
 percent_matrix = [["{:.1%}".format(tn/count), "{:.1%}".format(fp/count)],
